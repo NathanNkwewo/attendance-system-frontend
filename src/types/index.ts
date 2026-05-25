@@ -54,6 +54,7 @@ export interface Session {
 
 export interface CreateSessionPayload {
   courseId: string
+  durationMinutes?: number
 }
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
