@@ -14,6 +14,15 @@ const DURATION_OPTIONS = [
   { label: '2 hours', value: 120 },
 ]
 
+const RADIUS_OPTIONS = [
+  { label: '30 m', value: 30 },
+  { label: '50 m', value: 50 },
+  { label: '100 m', value: 100 },
+  { label: '150 m', value: 150 },
+  { label: '200 m', value: 200 },
+  { label: '300 m', value: 300 },
+]
+
 const DashboardPage = () => {
   const { faculty, logout } = useAuth()
   const navigate = useNavigate()
@@ -32,6 +41,7 @@ const DashboardPage = () => {
   const [showDurationModal, setShowDurationModal] = useState(false)
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null)
   const [selectedDuration, setSelectedDuration] = useState(45)
+  const [selectedRadius, setSelectedRadius] = useState(150)
 
   // Session state
   const [startingSession, setStartingSession] = useState(false)
@@ -85,7 +95,8 @@ const DashboardPage = () => {
   // Step 1 — open duration picker
   const handleStartSessionClick = (courseId: string) => {
     setSelectedCourseId(courseId)
-    setSelectedDuration(15)
+    setSelectedDuration(45)
+    setSelectedRadius(150)
     setShowDurationModal(true)
   }
 
@@ -100,7 +111,11 @@ const DashboardPage = () => {
       const location = await getFacultyLocation()
       setLocationStatus('Location acquired. Starting session...')
 
-      const session = await createSession({ courseId: selectedCourseId, durationMinutes: selectedDuration })
+      const session = await createSession({
+        courseId: selectedCourseId,
+        durationMinutes: selectedDuration,
+        geofenceRadius: selectedRadius,
+      })
 
       await api.post(`/sessions/${session.id}/location`, {
         latitude: location.latitude,
@@ -244,16 +259,18 @@ const DashboardPage = () => {
         </button>
       </div>
 
-      {/* Duration picker modal */}
+      {/* Duration + Radius picker modal */}
       {showDurationModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-            <h3 className="text-primary-900 font-bold text-lg mb-1">Session Duration</h3>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-primary-900 font-bold text-lg mb-1">Session Settings</h3>
             <p className="text-gray-400 text-sm mb-5">
-              How long should this session stay open for student submissions?
+              Configure the duration and geofence radius for this session.
             </p>
 
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            {/* Duration */}
+            <p className="text-sm font-semibold text-gray-700 mb-2">Session Duration</p>
+            <div className="grid grid-cols-2 gap-3 mb-5">
               {DURATION_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
@@ -268,8 +285,28 @@ const DashboardPage = () => {
               ))}
             </div>
 
+            {/* Geofence Radius */}
+            <p className="text-sm font-semibold text-gray-700 mb-2">Geofence Radius</p>
+            <p className="text-xs text-gray-400 mb-3">
+              Students must be within this distance of your location to mark attendance.
+            </p>
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              {RADIUS_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSelectedRadius(opt.value)}
+                  className={`py-3 px-2 rounded-xl border-2 text-sm font-medium transition-colors ${
+                    selectedRadius === opt.value
+                      ? 'border-primary-500 bg-primary-50 text-primary-700'
+                      : 'border-gray-200 text-gray-600 hover:border-primary-300'
+                  }`}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
             <p className="text-xs text-gray-400 mb-4 text-center">
-              Session will auto-close after {selectedDuration} minutes
+              Session closes after {selectedDuration} min · Radius: {selectedRadius} m
             </p>
 
             <div className="flex gap-3">
