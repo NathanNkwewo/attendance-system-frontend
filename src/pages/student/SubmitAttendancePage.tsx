@@ -173,11 +173,7 @@ const SubmitAttendancePage = () => {
             : 'Outside Allowed Area'}
         </h1>
         <p className="text-red-500 text-sm max-w-xs">{resultMessage}</p>
-        {distance !== undefined && (
-          <p className="text-red-400 text-xs mt-2">
-            You are approximately {Math.round(distance)}m away (limit: 150m)
-          </p>
-        )}
+        
         <button onClick={() => { setPageState('form'); setResultMessage('') }}
           className="mt-8 btn-primary bg-red-500 hover:bg-red-600">
           Try Again
