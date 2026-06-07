@@ -55,7 +55,7 @@ export interface Session {
 export interface CreateSessionPayload {
   courseId: string
   durationMinutes?: number
-  geofenceRaduis?: number
+  geofenceRadius?: number
 }
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
