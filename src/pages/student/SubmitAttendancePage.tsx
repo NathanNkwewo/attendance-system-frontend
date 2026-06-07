@@ -70,7 +70,7 @@ const SubmitAttendancePage = () => {
 
     setSubmitting(true)
     try {
-      const res = await fetch(`/api/face/status/${form.studentId}`)
+    const res = await fetch(`https://attendance-system-backend-production-9a23.up.railway.app/face/status/${form.studentId}`)
       const { enrolled } = await res.json()
       setPageState(enrolled ? 'face_verify' : 'face_enrol')
     } catch {
