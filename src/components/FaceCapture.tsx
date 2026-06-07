@@ -100,7 +100,7 @@ export default function FaceCapture({ mode, studentId, onSuccess, onFailure }: F
       const descriptor = Array.from(detection.descriptor)
 
       if (mode === 'enrol') {
-        const res = await fetch(`/api/face/enrol/${studentId}`, {
+       const res = await fetch(`https://attendance-system-backend-production-9a23.up.railway.app/face/enrol/${studentId}`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ descriptor }),
@@ -114,7 +114,7 @@ export default function FaceCapture({ mode, studentId, onSuccess, onFailure }: F
 
       } else {
         // verify mode
-        const res = await fetch(`/api/face/verify/${studentId}`, {
+       const res = await fetch(`https://attendance-system-backend-production-9a23.up.railway.app/face/verify/${studentId}`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ descriptor }),
