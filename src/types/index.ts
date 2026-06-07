@@ -55,6 +55,7 @@ export interface Session {
 export interface CreateSessionPayload {
   courseId: string
   durationMinutes?: number
+  geofenceRaduis?: number
 }
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ export interface AttendanceSubmitPayload {
   latitude: number
   longitude: number
   deviceFingerprint?: string
+  faceVerified?: boolean
 }
 
 export interface AttendanceSubmitResponse {

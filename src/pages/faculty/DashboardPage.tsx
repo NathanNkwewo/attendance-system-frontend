@@ -114,7 +114,7 @@ const DashboardPage = () => {
       const session = await createSession({
         courseId: selectedCourseId,
         durationMinutes: selectedDuration,
-        geofenceRadius: selectedRadius,
+        geofenceRadius: selectedRadius
       })
 
       await api.post(`/sessions/${session.id}/location`, {

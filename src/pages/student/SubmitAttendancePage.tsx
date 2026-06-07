@@ -221,7 +221,7 @@ const SubmitAttendancePage = () => {
           We could not confirm your identity after 3 attempts. Please see your lecturer.
         </p>
         <button
-          onClick={() => { setPageState('form'); setAttempts(0) }}
+          onClick={() => { setPageState('form') }}
           className="mt-8 btn-primary bg-red-500 hover:bg-red-600"
         >
           Back to Form
