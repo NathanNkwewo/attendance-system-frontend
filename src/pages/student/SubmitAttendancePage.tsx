@@ -2,10 +2,19 @@ import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useGPS } from '@/hooks/useGPS'
 import { submitAttendance } from '@/api/services'
+import FaceCapture from '@/components/FaceCapture'
 
-type PageState = 'form' | 'success' | 'failed' | 'duplicate' | 'closed' | 'device_used'
+type PageState =
+  | 'form'
+  | 'face_enrol'
+  | 'face_verify'
+  | 'face_failed'
+  | 'success'
+  | 'failed'
+  | 'duplicate'
+  | 'closed'
+  | 'device_used'
 
-// Generate a simple device fingerprint from browser properties
 const getDeviceFingerprint = (): string => {
   const data = [
     navigator.userAgent,
@@ -15,8 +24,6 @@ const getDeviceFingerprint = (): string => {
     screen.colorDepth,
     new Date().getTimezoneOffset(),
   ].join('|')
-
-  // Simple hash function
   let hash = 0
   for (let i = 0; i < data.length; i++) {
     const char = data.charCodeAt(i)
@@ -37,51 +44,73 @@ const SubmitAttendancePage = () => {
   const [distance, setDistance] = useState<number | undefined>()
   const [isOffline, setIsOffline] = useState(!navigator.onLine)
 
-  // Monitor online/offline status
   useEffect(() => {
-    const handleOnline = () => setIsOffline(false)
+    const handleOnline  = () => setIsOffline(false)
     const handleOffline = () => setIsOffline(true)
-    window.addEventListener('online', handleOnline)
+    window.addEventListener('online',  handleOnline)
     window.addEventListener('offline', handleOffline)
     return () => {
-      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('online',  handleOnline)
       window.removeEventListener('offline', handleOffline)
     }
   }, [])
 
-  // Auto-request GPS on page load
-  useEffect(() => {
-    requestLocation()
-  }, [])
+  useEffect(() => { requestLocation() }, [])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value })
   }
 
+  // ── Step 1: Submit clicked — check face enrolment status ─────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (isOffline) {
-      alert('You are offline. Please connect to the internet and try again.')
-      return
-    }
+    if (isOffline) { alert('You are offline. Please reconnect and try again.'); return }
+    if (gpsStatus !== 'success' || !coordinates) { alert('Please allow location access before submitting.'); return }
 
-    if (gpsStatus !== 'success' || !coordinates) {
-      alert('Please allow location access before submitting.')
-      return
+    setSubmitting(true)
+    try {
+      const res = await fetch(`/api/face/status/${form.studentId}`)
+      const { enrolled } = await res.json()
+      setPageState(enrolled ? 'face_verify' : 'face_enrol')
+    } catch {
+      // If face status check fails, skip face step and submit directly
+      await doSubmitAttendance(false)
+    } finally {
+      setSubmitting(false)
     }
+  }
 
+  // ── Step 2: After enrolment, move to verification ────────────────────────
+  const handleEnrolSuccess = () => {
+    setPageState('face_verify')
+  }
+
+  // ── Step 3: After verification, submit attendance ────────────────────────
+  const handleVerifySuccess = async () => {
+    await doSubmitAttendance(true)
+  }
+
+  // ── Step 3 (fail): Too many bad attempts ─────────────────────────────────
+  const handleVerifyFailure = () => {
+    setPageState('face_failed')
+  }
+
+  // ── Actual attendance submission ─────────────────────────────────────────
+  const doSubmitAttendance = async (faceVerified: boolean) => {
+    if (!coordinates) return
     setSubmitting(true)
     try {
       const deviceFingerprint = getDeviceFingerprint()
 
       const res = await submitAttendance({
-        studentName: form.studentName,
-        studentId: form.studentId,
-        sessionCode: form.sessionCode,
-        latitude: coordinates.latitude,
-        longitude: coordinates.longitude,
+        studentName:      form.studentName,
+        studentId:        form.studentId,
+        sessionCode:      form.sessionCode,
+        latitude:         coordinates.latitude,
+        longitude:        coordinates.longitude,
         deviceFingerprint,
+        faceVerified,
       })
 
       setResultMessage(res.message)
@@ -89,15 +118,10 @@ const SubmitAttendancePage = () => {
 
       if (!res.success) {
         const msg = res.message.toLowerCase()
-        if (msg.includes('already') || msg.includes('duplicate')) {
-          setPageState('duplicate')
-        } else if (msg.includes('closed')) {
-          setPageState('closed')
-        } else if (msg.includes('device')) {
-          setPageState('device_used')
-        } else {
-          setPageState('failed')
-        }
+        if (msg.includes('already') || msg.includes('duplicate')) setPageState('duplicate')
+        else if (msg.includes('closed'))  setPageState('closed')
+        else if (msg.includes('device'))  setPageState('device_used')
+        else                              setPageState('failed')
       } else if (!res.verified) {
         setPageState('failed')
       } else {
@@ -105,33 +129,109 @@ const SubmitAttendancePage = () => {
       }
     } catch (err: unknown) {
       const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        ?? null
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? null
 
       if (!msg) {
-        // Network error — likely offline
-        setResultMessage('Could not reach the server. Please check your internet connection and try again.')
+        setResultMessage('Could not reach the server. Please check your connection.')
         setPageState('failed')
         return
       }
 
       setResultMessage(msg)
       const lower = msg.toLowerCase()
-      if (lower.includes('already') || lower.includes('duplicate')) {
-        setPageState('duplicate')
-      } else if (lower.includes('closed')) {
-        setPageState('closed')
-      } else if (lower.includes('device')) {
-        setPageState('device_used')
-      } else {
-        setPageState('failed')
-      }
+      if (lower.includes('already') || lower.includes('duplicate')) setPageState('duplicate')
+      else if (lower.includes('closed'))  setPageState('closed')
+      else if (lower.includes('device'))  setPageState('device_used')
+      else                                setPageState('failed')
     } finally {
       setSubmitting(false)
     }
   }
 
-  // ── Success ────────────────────────────────────────────────────────────────
+  // ── Face enrolment screen ────────────────────────────────────────────────
+  if (pageState === 'face_enrol') {
+    return (
+      <div className="min-h-screen bg-primary-500 flex flex-col items-center justify-center px-4 py-10">
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent mb-3">
+            <span className="text-2xl">📷</span>
+          </div>
+          <h1 className="text-white text-xl font-bold">Face Enrolment</h1>
+          <p className="text-primary-200 text-sm mt-1">
+            First time here — register your face to continue
+          </p>
+        </div>
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+          <p className="text-gray-500 text-xs text-center mb-4">
+            Your face will be stored securely and used to verify your identity in future sessions.
+          </p>
+          <FaceCapture
+            mode="enrol"
+            studentId={form.studentId}
+            onSuccess={handleEnrolSuccess}
+          />
+        </div>
+        <p className="text-primary-300 text-xs mt-8 text-center">
+          University of Bamenda · GPS-Verified Attendance
+        </p>
+      </div>
+    )
+  }
+
+  // ── Face verification screen ─────────────────────────────────────────────
+  if (pageState === 'face_verify') {
+    return (
+      <div className="min-h-screen bg-primary-500 flex flex-col items-center justify-center px-4 py-10">
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent mb-3">
+            <span className="text-2xl">🔍</span>
+          </div>
+          <h1 className="text-white text-xl font-bold">Identity Verification</h1>
+          <p className="text-primary-200 text-sm mt-1">
+            Confirm it's you before submitting attendance
+          </p>
+        </div>
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+          <FaceCapture
+            mode="verify"
+            studentId={form.studentId}
+            onSuccess={handleVerifySuccess}
+            onFailure={handleVerifyFailure}
+          />
+        </div>
+        <p className="text-primary-300 text-xs mt-8 text-center">
+          University of Bamenda · GPS-Verified Attendance
+        </p>
+      </div>
+    )
+  }
+
+  // ── Face verification failed screen ──────────────────────────────────────
+  if (pageState === 'face_failed') {
+    return (
+      <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center px-4 text-center">
+        <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mb-6">
+          <svg className="w-10 h-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+          </svg>
+        </div>
+        <h1 className="text-2xl font-bold text-red-700 mb-2">Verification Failed</h1>
+        <p className="text-red-500 text-sm max-w-xs">
+          We could not confirm your identity after 3 attempts. Please see your lecturer.
+        </p>
+        <button
+          onClick={() => { setPageState('form'); setAttempts(0) }}
+          className="mt-8 btn-primary bg-red-500 hover:bg-red-600"
+        >
+          Back to Form
+        </button>
+        <p className="text-red-300 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
+      </div>
+    )
+  }
+
+  // ── Success ──────────────────────────────────────────────────────────────
   if (pageState === 'success') {
     return (
       <div className="min-h-screen bg-green-50 flex flex-col items-center justify-center px-4 text-center">
@@ -143,7 +243,9 @@ const SubmitAttendancePage = () => {
         <h1 className="text-2xl font-bold text-green-800 mb-2">Attendance Recorded!</h1>
         <p className="text-green-600 text-sm mb-1">Your presence has been verified.</p>
         {distance !== undefined && (
-          <p className="text-green-500 text-xs mt-1">You were {Math.round(distance)}m from the classroom centre</p>
+          <p className="text-green-500 text-xs mt-1">
+            You were {Math.round(distance)}m from the classroom centre
+          </p>
         )}
         <div className="mt-6 bg-white rounded-xl px-6 py-4 shadow-sm border border-green-100">
           <p className="text-gray-500 text-xs">Signed in as</p>
@@ -156,7 +258,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Outside geofence ──────────────────────────────────────────────────────
+  // ── Outside geofence ─────────────────────────────────────────────────────
   if (pageState === 'failed') {
     return (
       <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center px-4 text-center">
@@ -169,11 +271,9 @@ const SubmitAttendancePage = () => {
         </div>
         <h1 className="text-2xl font-bold text-red-700 mb-2">
           {resultMessage.includes('internet') || resultMessage.includes('server')
-            ? 'Connection Error'
-            : 'Outside Allowed Area'}
+            ? 'Connection Error' : 'Outside Allowed Area'}
         </h1>
         <p className="text-red-500 text-sm max-w-xs">{resultMessage}</p>
-        
         <button onClick={() => { setPageState('form'); setResultMessage('') }}
           className="mt-8 btn-primary bg-red-500 hover:bg-red-600">
           Try Again
@@ -183,7 +283,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Duplicate ──────────────────────────────────────────────────────────────
+  // ── Duplicate ─────────────────────────────────────────────────────────────
   if (pageState === 'duplicate') {
     return (
       <div className="min-h-screen bg-blue-50 flex flex-col items-center justify-center px-4 text-center">
@@ -194,13 +294,15 @@ const SubmitAttendancePage = () => {
           </svg>
         </div>
         <h1 className="text-2xl font-bold text-blue-700 mb-2">Already Submitted</h1>
-        <p className="text-blue-500 text-sm">Attendance for this session has already been recorded for your student ID.</p>
+        <p className="text-blue-500 text-sm">
+          Attendance for this session has already been recorded for your student ID.
+        </p>
         <p className="text-blue-400 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
       </div>
     )
   }
 
-  // ── Device already used ────────────────────────────────────────────────────
+  // ── Device already used ───────────────────────────────────────────────────
   if (pageState === 'device_used') {
     return (
       <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center px-4 text-center">
@@ -218,7 +320,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Session closed ─────────────────────────────────────────────────────────
+  // ── Session closed ────────────────────────────────────────────────────────
   if (pageState === 'closed') {
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center px-4 text-center">
@@ -229,13 +331,13 @@ const SubmitAttendancePage = () => {
           </svg>
         </div>
         <h1 className="text-2xl font-bold text-gray-600 mb-2">Session Closed</h1>
-        <p className="text-gray-400 text-sm">This attendance session is no longer accepting submissions.</p>
+        <p className="text-gray-400 text-sm">This session is no longer accepting submissions.</p>
         <p className="text-gray-300 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
       </div>
     )
   }
 
-  // ── Main form ──────────────────────────────────────────────────────────────
+  // ── Main form ─────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-primary-500 flex flex-col items-center justify-center px-4 py-10">
 
@@ -264,7 +366,7 @@ const SubmitAttendancePage = () => {
 
       {/* GPS status */}
       <div className={`w-full max-w-sm rounded-xl px-4 py-3 mb-4 flex items-center gap-3 text-sm ${
-        gpsStatus === 'success' ? 'bg-green-500 text-white'
+        gpsStatus === 'success'    ? 'bg-green-500 text-white'
         : gpsStatus === 'requesting' ? 'bg-primary-400 text-white'
         : 'bg-red-500 text-white'
       }`}>
@@ -304,7 +406,7 @@ const SubmitAttendancePage = () => {
       {gpsStatus !== 'success' && (
         <div className="w-full max-w-sm bg-primary-600 rounded-xl px-4 py-3 mb-4 text-primary-100 text-xs">
           <p className="font-semibold mb-1">Why do we need your location?</p>
-          <p>This system uses GPS to confirm you are physically present in the classroom. Your exact location is only used for verification and is not stored beyond what is needed.</p>
+          <p>This system uses GPS to confirm you are physically present in the classroom.</p>
         </div>
       )}
 
@@ -330,11 +432,13 @@ const SubmitAttendancePage = () => {
               maxLength={6} required className="input-field font-mono tracking-widest text-center text-xl" />
           </div>
 
-          <button type="submit"
+          <button
+            type="submit"
             disabled={submitting || gpsStatus !== 'success' || isOffline}
-            className="btn-primary w-full mt-2">
-            {submitting ? 'Submitting...'
-              : isOffline ? 'No Internet Connection'
+            className="btn-primary w-full mt-2"
+          >
+            {submitting        ? 'Checking...'
+              : isOffline      ? 'No Internet Connection'
               : gpsStatus !== 'success' ? 'Waiting for GPS...'
               : 'Submit Attendance'}
           </button>
