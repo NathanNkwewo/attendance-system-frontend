@@ -8,6 +8,7 @@ import DashboardPage from '@/pages/faculty/DashboardPage'
 import SessionDetailPage from '@/pages/faculty/SessionDetailPage'
 import AttendanceSummaryPage from '@/pages/faculty/AttendanceSummaryPage'
 import SubmitAttendancePage from '@/pages/student/SubmitAttendancePage'
+import AnalyticsPage from '@/pages/faculty/AnalyticsPage'
 
 const PrivateRoute = ({ children }: { children: ReactNode }) => {
   const { isAuthenticated } = useAuth()
@@ -19,6 +20,7 @@ const AppRoutes = () => (
     {/* Public */}
     <Route path="/login" element={<LoginPage />} />
     <Route path="/register" element={<RegisterPage />} />
+    <Route path="/courses/:courseId/analytics" element={<AnalyticsPage />} />
 
     {/* Student attendance submission — accessed via shared URL */}
     <Route path="/attend/:sessionId" element={<SubmitAttendancePage />} />

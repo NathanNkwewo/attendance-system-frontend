@@ -7,20 +7,28 @@ import type { Course, Session } from '@/types'
 
 const DURATION_OPTIONS = [
   { label: '45 minutes', value: 45 },
-  { label: '1 hour', value: 60 },
+  { label: '1 hour',     value: 60 },
   { label: '1 hr 15 mins', value: 75 },
   { label: '1 hr 30 mins', value: 90 },
   { label: '1 hr 45 mins', value: 105 },
-  { label: '2 hours', value: 120 },
+  { label: '2 hours',    value: 120 },
 ]
 
 const RADIUS_OPTIONS = [
-  { label: '30 m', value: 30 },
-  { label: '50 m', value: 50 },
+  { label: '30 m',  value: 30  },
+  { label: '50 m',  value: 50  },
   { label: '100 m', value: 100 },
   { label: '150 m', value: 150 },
   { label: '200 m', value: 200 },
   { label: '300 m', value: 300 },
+]
+
+const LATE_OPTIONS = [
+  { label: 'No limit',  value: null },
+  { label: '10 mins',   value: 10   },
+  { label: '15 mins',   value: 15   },
+  { label: '20 mins',   value: 20   },
+  { label: '30 mins',   value: 30   },
 ]
 
 const DashboardPage = () => {
@@ -37,11 +45,12 @@ const DashboardPage = () => {
   const [creating, setCreating] = useState(false)
   const [courseError, setCourseError] = useState<string | null>(null)
 
-  // Duration picker modal
+  // Session settings modal
   const [showDurationModal, setShowDurationModal] = useState(false)
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null)
   const [selectedDuration, setSelectedDuration] = useState(45)
   const [selectedRadius, setSelectedRadius] = useState(150)
+  const [selectedLateAfter, setSelectedLateAfter] = useState<number | null>(null)
 
   // Session state
   const [startingSession, setStartingSession] = useState(false)
@@ -92,15 +101,14 @@ const DashboardPage = () => {
     })
   }
 
-  // Step 1 — open duration picker
   const handleStartSessionClick = (courseId: string) => {
     setSelectedCourseId(courseId)
     setSelectedDuration(45)
     setSelectedRadius(150)
+    setSelectedLateAfter(null)
     setShowDurationModal(true)
   }
 
-  // Step 2 — confirm and start
   const handleConfirmSession = async () => {
     if (!selectedCourseId) return
     setShowDurationModal(false)
@@ -114,7 +122,8 @@ const DashboardPage = () => {
       const session = await createSession({
         courseId: selectedCourseId,
         durationMinutes: selectedDuration,
-        geofenceRadius: selectedRadius
+        geofenceRadius: selectedRadius,
+        lateAfterMinutes: selectedLateAfter,
       })
 
       await api.post(`/sessions/${session.id}/location`, {
@@ -139,6 +148,9 @@ const DashboardPage = () => {
   }
 
   const handleLogout = () => { logout(); navigate('/login') }
+
+  // Get first name only for the greeting
+  const firstName = faculty?.name?.split(' ')[0] ?? 'Lecturer'
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -165,9 +177,13 @@ const DashboardPage = () => {
       </nav>
 
       <div className="max-w-2xl mx-auto px-4 py-8">
+
+        {/* Welcome message */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-primary-900">My Courses</h1>
-          <p className="text-gray-500 text-sm mt-1">Start a session to take attendance</p>
+          <h1 className="text-2xl font-bold text-primary-900">
+            Welcome, Prof. {firstName} 👋
+          </h1>
+          <p className="text-gray-500 text-sm mt-1">Manage your courses and attendance sessions</p>
         </div>
 
         {error && (
@@ -234,10 +250,16 @@ const DashboardPage = () => {
                     {course.code}
                   </span>
                   <h3 className="text-primary-900 font-semibold mt-1">{course.name}</h3>
-                  <button onClick={() => navigate(`/courses/${course.id}/summary`)}
-                    className="text-xs text-primary-400 hover:text-primary-600 mt-1 transition-colors">
-                    View attendance summary →
-                  </button>
+                  <div className="flex items-center gap-3 mt-1">
+                    <button onClick={() => navigate(`/courses/${course.id}/summary`)}
+                      className="text-xs text-primary-400 hover:text-primary-600 transition-colors">
+                      Attendance summary →
+                    </button>
+                    <button onClick={() => navigate(`/courses/${course.id}/analytics`)}
+                      className="text-xs text-indigo-400 hover:text-indigo-600 transition-colors">
+                      Analytics →
+                    </button>
+                  </div>
                 </div>
                 <button
                   onClick={() => handleStartSessionClick(course.id)}
@@ -259,22 +281,18 @@ const DashboardPage = () => {
         </button>
       </div>
 
-      {/* Duration + Radius picker modal */}
+      {/* Session Settings Modal */}
       {showDurationModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 max-h-[90vh] overflow-y-auto">
             <h3 className="text-primary-900 font-bold text-lg mb-1">Session Settings</h3>
-            <p className="text-gray-400 text-sm mb-5">
-              Configure the duration and geofence radius for this session.
-            </p>
+            <p className="text-gray-400 text-sm mb-5">Configure this attendance session.</p>
 
             {/* Duration */}
             <p className="text-sm font-semibold text-gray-700 mb-2">Session Duration</p>
             <div className="grid grid-cols-2 gap-3 mb-5">
               {DURATION_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setSelectedDuration(opt.value)}
+                <button key={opt.value} onClick={() => setSelectedDuration(opt.value)}
                   className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-colors ${
                     selectedDuration === opt.value
                       ? 'border-primary-500 bg-primary-50 text-primary-700'
@@ -288,13 +306,11 @@ const DashboardPage = () => {
             {/* Geofence Radius */}
             <p className="text-sm font-semibold text-gray-700 mb-2">Geofence Radius</p>
             <p className="text-xs text-gray-400 mb-3">
-              Students must be within this distance of your location to mark attendance.
+              Students must be within this distance of your location.
             </p>
             <div className="grid grid-cols-3 gap-3 mb-5">
               {RADIUS_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setSelectedRadius(opt.value)}
+                <button key={opt.value} onClick={() => setSelectedRadius(opt.value)}
                   className={`py-3 px-2 rounded-xl border-2 text-sm font-medium transition-colors ${
                     selectedRadius === opt.value
                       ? 'border-primary-500 bg-primary-50 text-primary-700'
@@ -305,8 +321,27 @@ const DashboardPage = () => {
               ))}
             </div>
 
+            {/* Late Submission Window */}
+            <p className="text-sm font-semibold text-gray-700 mb-2">Late Submission Window</p>
+            <p className="text-xs text-gray-400 mb-3">
+              Submissions after this time will be marked as late.
+            </p>
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              {LATE_OPTIONS.map((opt) => (
+                <button key={String(opt.value)} onClick={() => setSelectedLateAfter(opt.value)}
+                  className={`py-3 px-4 rounded-xl border-2 text-sm font-medium transition-colors ${
+                    selectedLateAfter === opt.value
+                      ? 'border-amber-500 bg-amber-50 text-amber-700'
+                      : 'border-gray-200 text-gray-600 hover:border-amber-300'
+                  }`}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
             <p className="text-xs text-gray-400 mb-4 text-center">
-              Session closes after {selectedDuration} min · Radius: {selectedRadius} m
+              Duration: {selectedDuration} min · Radius: {selectedRadius} m
+              {selectedLateAfter ? ` · Late after: ${selectedLateAfter} min` : ' · No late limit'}
             </p>
 
             <div className="flex gap-3">
@@ -321,7 +356,7 @@ const DashboardPage = () => {
         </div>
       )}
 
-      {/* Create Course modal */}
+      {/* Create Course Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center px-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">

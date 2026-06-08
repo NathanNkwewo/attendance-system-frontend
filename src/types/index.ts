@@ -56,6 +56,7 @@ export interface CreateSessionPayload {
   courseId: string
   durationMinutes?: number
   geofenceRadius?: number
+  lateAfterMinutes?: number | null
 }
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
@@ -70,6 +71,8 @@ export interface AttendanceRecord {
   distance: number
   verified: boolean
   submittedAt: string
+  isLate?: boolean
+isManual?: boolean
 }
 
 export interface AttendanceSubmitPayload {
