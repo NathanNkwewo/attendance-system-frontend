@@ -89,6 +89,7 @@ export interface AttendanceSubmitResponse {
   success: boolean
   message: string
   verified: boolean
+  islate?: boolean
   distance?: number
 }
 
