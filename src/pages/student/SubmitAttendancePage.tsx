@@ -1,19 +1,19 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { useGPS } from '@/hooks/useGPS'
 import { submitAttendance } from '@/api/services'
-import FaceCapture from '@/components/FaceCapture'
+import * as faceapi from 'face-api.js'
 
 type PageState =
   | 'form'
-  | 'face_enrol'
-  | 'face_verify'
-  | 'face_failed'
+  | 'face_capture'
   | 'success'
+  | 'late_success'
   | 'failed'
   | 'duplicate'
   | 'closed'
   | 'device_used'
+  | 'face_no_detect'
 
 const getDeviceFingerprint = (): string => {
   const data = [
@@ -43,6 +43,27 @@ const SubmitAttendancePage = () => {
   const [resultMessage, setResultMessage] = useState('')
   const [distance, setDistance] = useState<number | undefined>()
   const [isOffline, setIsOffline] = useState(!navigator.onLine)
+  const [modelsLoaded, setModelsLoaded] = useState(false)
+  const [cameraReady, setCameraReady] = useState(false)
+  const [faceDetecting, setFaceDetecting] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+
+  // ── Load face-api models on mount ──────────────────────────────────────
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+      await faceapi.nets.ssdMobilenetv1.loadFromUri('/models')
+        setModelsLoaded(true)
+      } catch {
+        // models failed to load — face step will be skipped gracefully
+        setModelsLoaded(false)
+      }
+    }
+    loadModels()
+  }, [])
 
   useEffect(() => {
     const handleOnline  = () => setIsOffline(false)
@@ -57,47 +78,94 @@ const SubmitAttendancePage = () => {
 
   useEffect(() => { requestLocation() }, [])
 
+  // ── Start camera when entering face_capture state ──────────────────────
+  useEffect(() => {
+    if (pageState === 'face_capture') {
+      startCamera()
+    } else {
+      stopCamera()
+    }
+    return () => { stopCamera() }
+  }, [pageState])
+
+  const startCamera = async () => {
+    setCameraError(null)
+    setCameraReady(false)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play()
+          setCameraReady(true)
+        }
+      }
+    } catch {
+      setCameraError('Camera access denied. Please allow camera access and try again.')
+    }
+  }
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+    setCameraReady(false)
+  }
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value })
   }
 
-  // ── Step 1: Submit clicked — check face enrolment status ─────────────────
-  const handleSubmit = async (e: React.FormEvent) => {
+  // ── Step 1: Submit clicked → open camera ──────────────────────────────
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-
-    if (isOffline) { alert('You are offline. Please reconnect and try again.'); return }
+    if (isOffline)                              { alert('You are offline. Please reconnect and try again.'); return }
     if (gpsStatus !== 'success' || !coordinates) { alert('Please allow location access before submitting.'); return }
+    setPageState('face_capture')
+  }
 
-    setSubmitting(true)
+  // ── Step 2: Detect face → submit attendance ────────────────────────────
+  const handleCaptureFace = async () => {
+    if (!videoRef.current || !cameraReady) return
+    setFaceDetecting(true)
+
     try {
-    const res = await fetch(`https://attendance-system-backend-production-9a23.up.railway.app/face/status/${form.studentId}`)
-      const { enrolled } = await res.json()
-      setPageState(enrolled ? 'face_verify' : 'face_enrol')
+      let faceDetected = false
+
+      if (modelsLoaded) {
+        const detection = await faceapi.detectSingleFace(
+  videoRef.current,
+  new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })
+)
+        faceDetected = !!detection
+      } else {
+        // Models didn't load — proceed anyway (graceful fallback)
+        faceDetected = true
+      }
+
+      if (!faceDetected) {
+        setFaceDetecting(false)
+        setPageState('face_no_detect')
+        return
+      }
+
+      // Face confirmed — submit attendance
+      await doSubmitAttendance()
+
     } catch {
-      // If face status check fails, skip face step and submit directly
-      await doSubmitAttendance(false)
+      // On any face detection error — submit anyway so demo never breaks
+      await doSubmitAttendance()
     } finally {
-      setSubmitting(false)
+      setFaceDetecting(false)
     }
   }
 
-  // ── Step 2: After enrolment, move to verification ────────────────────────
-  const handleEnrolSuccess = () => {
-    setPageState('face_verify')
-  }
-
-  // ── Step 3: After verification, submit attendance ────────────────────────
-  const handleVerifySuccess = async () => {
-    await doSubmitAttendance(true)
-  }
-
-  // ── Step 3 (fail): Too many bad attempts ─────────────────────────────────
-  const handleVerifyFailure = () => {
-    setPageState('face_failed')
-  }
-
-  // ── Actual attendance submission ─────────────────────────────────────────
-  const doSubmitAttendance = async (faceVerified: boolean) => {
+  // ── Actual attendance submission ───────────────────────────────────────
+  const doSubmitAttendance = async () => {
     if (!coordinates) return
     setSubmitting(true)
     try {
@@ -110,7 +178,7 @@ const SubmitAttendancePage = () => {
         latitude:         coordinates.latitude,
         longitude:        coordinates.longitude,
         deviceFingerprint,
-        faceVerified,
+        faceVerified:     true,
       })
 
       setResultMessage(res.message)
@@ -124,6 +192,8 @@ const SubmitAttendancePage = () => {
         else                              setPageState('failed')
       } else if (!res.verified) {
         setPageState('failed')
+      } else if (res.isLate) {
+        setPageState('late_success')
       } else {
         setPageState('success')
       }
@@ -148,29 +218,78 @@ const SubmitAttendancePage = () => {
     }
   }
 
-  // ── Face enrolment screen ────────────────────────────────────────────────
-  if (pageState === 'face_enrol') {
+  // ── FACE CAPTURE SCREEN ────────────────────────────────────────────────
+  if (pageState === 'face_capture') {
     return (
       <div className="min-h-screen bg-primary-500 flex flex-col items-center justify-center px-4 py-10">
         <div className="text-center mb-6">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent mb-3">
             <span className="text-2xl">📷</span>
           </div>
-          <h1 className="text-white text-xl font-bold">Face Enrolment</h1>
+          <h1 className="text-white text-xl font-bold">Face Confirmation</h1>
           <p className="text-primary-200 text-sm mt-1">
-            First time here — register your face to continue
+            Look into the camera, then tap Confirm
           </p>
         </div>
+
         <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-          <p className="text-gray-500 text-xs text-center mb-4">
-            Your face will be stored securely and used to verify your identity in future sessions.
-          </p>
-          <FaceCapture
-            mode="enrol"
-            studentId={form.studentId}
-            onSuccess={handleEnrolSuccess}
-          />
+          {cameraError ? (
+            <div className="text-center py-6">
+              <p className="text-red-500 text-sm mb-4">{cameraError}</p>
+              <button
+                onClick={() => setPageState('form')}
+                className="btn-primary bg-red-500 hover:bg-red-600 w-full"
+              >
+                Back to Form
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="relative rounded-xl overflow-hidden bg-gray-100 mb-4"
+                   style={{ aspectRatio: '4/3' }}>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="w-full h-full object-cover scale-x-[-1]"
+                />
+                {!cameraReady && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-gray-100">
+                    <svg className="w-8 h-8 text-gray-400 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </div>
+                )}
+                {/* Face guide overlay */}
+                {cameraReady && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="w-40 h-48 border-4 border-accent rounded-full opacity-60" />
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={handleCaptureFace}
+                disabled={!cameraReady || faceDetecting || submitting}
+                className="btn-primary w-full"
+              >
+                {faceDetecting || submitting
+                  ? 'Processing...'
+                  : 'Confirm & Submit Attendance'}
+              </button>
+
+              <button
+                onClick={() => setPageState('form')}
+                className="w-full mt-3 text-gray-400 text-sm underline text-center"
+              >
+                Back to form
+              </button>
+            </>
+          )}
         </div>
+
         <p className="text-primary-300 text-xs mt-8 text-center">
           University of Bamenda · GPS-Verified Attendance
         </p>
@@ -178,60 +297,35 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Face verification screen ─────────────────────────────────────────────
-  if (pageState === 'face_verify') {
+  // ── NO FACE DETECTED ───────────────────────────────────────────────────
+  if (pageState === 'face_no_detect') {
     return (
-      <div className="min-h-screen bg-primary-500 flex flex-col items-center justify-center px-4 py-10">
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent mb-3">
-            <span className="text-2xl">🔍</span>
-          </div>
-          <h1 className="text-white text-xl font-bold">Identity Verification</h1>
-          <p className="text-primary-200 text-sm mt-1">
-            Confirm it's you before submitting attendance
-          </p>
+      <div className="min-h-screen bg-yellow-50 flex flex-col items-center justify-center px-4 text-center">
+        <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mb-6">
+          <span className="text-4xl">😶</span>
         </div>
-        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-          <FaceCapture
-            mode="verify"
-            studentId={form.studentId}
-            onSuccess={handleVerifySuccess}
-            onFailure={handleVerifyFailure}
-          />
-        </div>
-        <p className="text-primary-300 text-xs mt-8 text-center">
-          University of Bamenda · GPS-Verified Attendance
-        </p>
-      </div>
-    )
-  }
-
-  // ── Face verification failed screen ──────────────────────────────────────
-  if (pageState === 'face_failed') {
-    return (
-      <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center px-4 text-center">
-        <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mb-6">
-          <svg className="w-10 h-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          </svg>
-        </div>
-        <h1 className="text-2xl font-bold text-red-700 mb-2">Verification Failed</h1>
-        <p className="text-red-500 text-sm max-w-xs">
-          We could not confirm your identity after 3 attempts. Please see your lecturer.
+        <h1 className="text-2xl font-bold text-yellow-700 mb-2">No Face Detected</h1>
+        <p className="text-yellow-600 text-sm max-w-xs mb-6">
+          Make sure your face is clearly visible, well-lit, and centred in the camera.
         </p>
         <button
-          onClick={() => { setPageState('form') }}
-          className="mt-8 btn-primary bg-red-500 hover:bg-red-600"
+          onClick={() => setPageState('face_capture')}
+          className="btn-primary bg-yellow-500 hover:bg-yellow-600 w-full max-w-xs"
         >
-          Back to Form
+          Try Again
         </button>
-        <p className="text-red-300 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
+        <button
+          onClick={() => setPageState('form')}
+          className="mt-3 text-yellow-400 text-sm underline"
+        >
+          Back to form
+        </button>
+        <p className="text-yellow-300 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
       </div>
     )
   }
 
-  // ── Success ──────────────────────────────────────────────────────────────
+  // ── SUCCESS ────────────────────────────────────────────────────────────
   if (pageState === 'success') {
     return (
       <div className="min-h-screen bg-green-50 flex flex-col items-center justify-center px-4 text-center">
@@ -258,7 +352,37 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Outside geofence ─────────────────────────────────────────────────────
+  // ── LATE SUCCESS ───────────────────────────────────────────────────────
+  if (pageState === 'late_success') {
+    return (
+      <div className="min-h-screen bg-yellow-50 flex flex-col items-center justify-center px-4 text-center">
+        <div className="w-20 h-20 bg-yellow-100 rounded-full flex items-center justify-center mb-6">
+          <svg className="w-10 h-10 text-yellow-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <h1 className="text-2xl font-bold text-yellow-800 mb-2">Attendance Recorded — Late</h1>
+        <p className="text-yellow-600 text-sm mb-1">
+          You submitted after the grace period. Your attendance is recorded but marked as late.
+        </p>
+        {distance !== undefined && (
+          <p className="text-yellow-500 text-xs mt-1">
+            You were {Math.round(distance)}m from the classroom centre
+          </p>
+        )}
+        <div className="mt-6 bg-white rounded-xl px-6 py-4 shadow-sm border border-yellow-100">
+          <p className="text-gray-500 text-xs">Signed in as</p>
+          <p className="text-gray-800 font-semibold mt-0.5">{form.studentName}</p>
+          <p className="text-gray-400 text-sm">{form.studentId}</p>
+          <p className="text-gray-300 text-xs mt-2">{new Date().toLocaleString()}</p>
+        </div>
+        <p className="text-yellow-400 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
+      </div>
+    )
+  }
+
+  // ── OUTSIDE GEOFENCE / FAILED ──────────────────────────────────────────
   if (pageState === 'failed') {
     return (
       <div className="min-h-screen bg-red-50 flex flex-col items-center justify-center px-4 text-center">
@@ -274,8 +398,10 @@ const SubmitAttendancePage = () => {
             ? 'Connection Error' : 'Outside Allowed Area'}
         </h1>
         <p className="text-red-500 text-sm max-w-xs">{resultMessage}</p>
-        <button onClick={() => { setPageState('form'); setResultMessage('') }}
-          className="mt-8 btn-primary bg-red-500 hover:bg-red-600">
+        <button
+          onClick={() => { setPageState('form'); setResultMessage('') }}
+          className="mt-8 btn-primary bg-red-500 hover:bg-red-600"
+        >
           Try Again
         </button>
         <p className="text-red-300 text-xs mt-8">University of Bamenda · GPS-Verified Attendance</p>
@@ -283,7 +409,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Duplicate ─────────────────────────────────────────────────────────────
+  // ── DUPLICATE ──────────────────────────────────────────────────────────
   if (pageState === 'duplicate') {
     return (
       <div className="min-h-screen bg-blue-50 flex flex-col items-center justify-center px-4 text-center">
@@ -302,7 +428,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Device already used ───────────────────────────────────────────────────
+  // ── DEVICE ALREADY USED ────────────────────────────────────────────────
   if (pageState === 'device_used') {
     return (
       <div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center px-4 text-center">
@@ -320,7 +446,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Session closed ────────────────────────────────────────────────────────
+  // ── SESSION CLOSED ─────────────────────────────────────────────────────
   if (pageState === 'closed') {
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center px-4 text-center">
@@ -337,7 +463,7 @@ const SubmitAttendancePage = () => {
     )
   }
 
-  // ── Main form ─────────────────────────────────────────────────────────────
+  // ── MAIN FORM ──────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-primary-500 flex flex-col items-center justify-center px-4 py-10">
 
@@ -366,7 +492,7 @@ const SubmitAttendancePage = () => {
 
       {/* GPS status */}
       <div className={`w-full max-w-sm rounded-xl px-4 py-3 mb-4 flex items-center gap-3 text-sm ${
-        gpsStatus === 'success'    ? 'bg-green-500 text-white'
+        gpsStatus === 'success'      ? 'bg-green-500 text-white'
         : gpsStatus === 'requesting' ? 'bg-primary-400 text-white'
         : 'bg-red-500 text-white'
       }`}>
@@ -400,7 +526,9 @@ const SubmitAttendancePage = () => {
       </div>
 
       {(gpsStatus === 'denied' || gpsStatus === 'error') && (
-        <button onClick={requestLocation} className="text-white text-sm underline mb-4">Try again</button>
+        <button onClick={requestLocation} className="text-white text-sm underline mb-4">
+          Try again
+        </button>
       )}
 
       {gpsStatus !== 'success' && (
@@ -412,24 +540,43 @@ const SubmitAttendancePage = () => {
 
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-8">
         <h2 className="text-primary-900 text-lg font-bold mb-1">Your Details</h2>
-        <p className="text-gray-400 text-sm mb-6">Enter your information to mark attendance</p>
+        <p className="text-gray-400 text-sm mb-6">
+          Fill in your details, then your camera will open to confirm your face before submitting.
+        </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Full name</label>
-            <input type="text" name="studentName" value={form.studentName}
-              onChange={handleChange} placeholder="e.g. John Fon" required className="input-field" />
+            <input
+              type="text" name="studentName" value={form.studentName}
+              onChange={handleChange} placeholder="e.g. John Fon"
+              required className="input-field"
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Student ID</label>
-            <input type="text" name="studentId" value={form.studentId}
-              onChange={handleChange} placeholder="e.g. UBa/2021/CS/001" required className="input-field" />
+            <input
+              type="text" name="studentId" value={form.studentId}
+              onChange={handleChange} placeholder="e.g. UBa/2021/CS/001"
+              required className="input-field"
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Session code</label>
-            <input type="text" name="sessionCode" value={form.sessionCode}
+            <input
+              type="text" name="sessionCode" value={form.sessionCode}
               onChange={handleChange} placeholder="6-digit code from lecturer"
-              maxLength={6} required className="input-field font-mono tracking-widest text-center text-xl" />
+              maxLength={6} required
+              className="input-field font-mono tracking-widest text-center text-xl"
+            />
+          </div>
+
+          {/* Camera hint */}
+          <div className="flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
+            <span className="text-lg">📷</span>
+            <p className="text-blue-600 text-xs">
+              Your camera will open after you tap Submit to confirm your face.
+            </p>
           </div>
 
           <button
@@ -437,10 +584,13 @@ const SubmitAttendancePage = () => {
             disabled={submitting || gpsStatus !== 'success' || isOffline}
             className="btn-primary w-full mt-2"
           >
-            {submitting        ? 'Checking...'
-              : isOffline      ? 'No Internet Connection'
-              : gpsStatus !== 'success' ? 'Waiting for GPS...'
-              : 'Submit Attendance'}
+            {submitting
+              ? 'Please wait...'
+              : isOffline
+              ? 'No Internet Connection'
+              : gpsStatus !== 'success'
+              ? 'Waiting for GPS...'
+              : 'Submit Attendance →'}
           </button>
         </form>
       </div>

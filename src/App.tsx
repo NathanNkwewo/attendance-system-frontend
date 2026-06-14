@@ -29,7 +29,6 @@ const AppRoutes = () => (
     <Route path="/dashboard" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
     <Route path="/sessions/:sessionId" element={<PrivateRoute><SessionDetailPage /></PrivateRoute>} />
     <Route path="/courses/:courseId/summary" element={<PrivateRoute><AttendanceSummaryPage /></PrivateRoute>} />
-
     {/* Default */}
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Routes>
